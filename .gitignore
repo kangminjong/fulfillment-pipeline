@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+pg_data/
+postgres_data/
+kafka_data/
+data/
+*.log
+.env
+.env.local
+# (선택) 만약 config.py에 실제 비번을 적었다면 주석 해제하세요
+# src/config.py
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
