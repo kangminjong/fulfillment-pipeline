@@ -1,0 +1,80 @@
+services:
+  # ---------------------------------------------------
+  # 1. Kafka (브로커 + 컨트롤러 통합 모드)
+  # ---------------------------------------------------
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092" # 내 컴퓨터에서 접속할 때 (External)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # [리스너 설정]
+      # INTERNAL(29092): 도커 내부끼리 통신 (Python -> Kafka)
+      # EXTERNAL(9092): 내 컴퓨터에서 통신 (Localhost -> Kafka)
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 3 # 기본 파티션 수
+    volumes:
+      - ./kafka_data:/var/lib/kafka/data
+
+  # ---------------------------------------------------
+  # 2. Kafka UI (웹 모니터링 도구) -> http://localhost:8080
+  # ---------------------------------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092 # 도커 내부 주소 사용
+    depends_on:
+      - kafka
+
+  # ---------------------------------------------------
+  # 3. PostgreSQL (데이터베이스)
+  # ---------------------------------------------------
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: fulfillment
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+      # 아래 폴더에 .sql 파일 넣어두면 처음에 자동 실행됨 (테이블 생성 등)
+      - ./init_sql:/docker-entrypoint-initdb.d
+
+  # ---------------------------------------------------
+  # 4. Python App (프로듀서 & 컨슈머 실행용)
+  # ---------------------------------------------------
+  app:
+    build: .  # 현재 폴더의 Dockerfile로 빌드
+    container_name: python-app
+    volumes:
+      # ⭐ 핵심: 내 소스코드(src)를 컨테이너 안(/app/src)과 연결
+      - ./src:/app/src
+    environment:
+      # 파이썬 코드에서 os.getenv로 불러다 쓸 변수들
+      BOOTSTRAP_SERVERS: kafka:29092
+      DB_HOST: postgres
+      DB_USER: admin
+      DB_PASSWORD: admin
+      DB_NAME: fulfillment
+    depends_on:
+      - kafka
+      - postgres
+    # ⭐ 핵심: 컨테이너가 꺼지지 않게 무한 대기 시킴
+    command: tail -f /dev/null
