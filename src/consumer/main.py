@@ -79,11 +79,11 @@ def main() -> int:
     # DB 연결 (events/order_current 적재용)
     # -----------------------------
     repo = PostgresRepository(
-        host=env("POSTGRES_HOST", "localhost"),
+        host=env("POSTGRES_HOST", "192.168.239.40"),
         port=int(env("POSTGRES_PORT", "5432")),
-        dbname=env("POSTGRES_DB", "postgres"),
-        user=env("POSTGRES_USER", "postgres"),
-        password=env("POSTGRES_PASSWORD", "postgres"),
+        dbname=env("POSTGRES_DB", "fulfillment"),
+        user=env("POSTGRES_USER", "admin"),
+        password=env("POSTGRES_PASSWORD", "admin"),
     )
 
     # -----------------------------
