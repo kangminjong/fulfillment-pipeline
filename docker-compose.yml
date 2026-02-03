@@ -67,8 +67,25 @@ services:
       - ./pg_data:/var/lib/postgresql/data
       - ./init_sql:/docker-entrypoint-initdb.d
 
+
   # =============================================================================
-  # 4) Python App (대기용)
+  # 4) Backend
+  # =============================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dashboard-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    depends_on:
+      - postgres
+
+
+  # =============================================================================
+  # 5) Python App (대기용)
   # =============================================================================
   app:
     build: .
