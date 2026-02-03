@@ -169,36 +169,49 @@ def main():
             # -----------------------------
             # (A) 최소 보정/정규화
             # -----------------------------
-            # event_id 없으면 생성 (PK)
             event_id = event.get("event_id") or str(uuid.uuid4())
 
             order_id = event.get("order_id")
             current_stage = event.get("current_stage")
             current_status = event.get("current_status")
 
-            # event_type 없으면 status로 대체 (NOT NULL 방어)
-            event_type = event.get("event_type") or current_status or "UNKNOWN"
-
             hold_reason_code = event.get("hold_reason_code")
             occurred_at = parse_occurred_at(event.get("occurred_at"))
 
             tracking_no = event.get("tracking_no")
-            promised_delivery_date = event.get("promised_delivery_date")  # 문자열이어도 PG가 date cast 가능하면 처리됨
+            promised_delivery_date = event.get("promised_delivery_date")
+
+            # ✅ 핵심 수정:
+            # events.event_type 은 "order_current에 들어갈 last_event_type" 값을 따라가야 함
+            # 즉 order_current.last_event_type -> events.event_type
+            last_event_type = (
+                event.get("last_event_type")
+                or event.get("event_type")
+                or current_status
+                or "UNKNOWN"
+            )
 
             # 콘솔 로그 (수업 형태 유지)
             print("✅ 메시지 수신")
             print(f"   order_id : {order_id}")
             print(f"   status   : {current_status}")
+            print(f"   last_event_type: {last_event_type}")
             print(f"   partition: {msg.partition}")
             print(f"   offset   : {msg.offset}")
             print()
 
-            # payload는 "원본 + 보정한 일부"까지 포함해서 남겨도 되고,
-            # 여기선 원본 event 그대로 저장 + event_id/occurred_at 보정값을 덮어씌워 저장(추천)
-            payload_for_db = dict(event)
-            payload_for_db["event_id"] = event_id
-            # occurred_at은 datetime을 json으로 못 넣으니 ISO 문자열로 넣어줌
-            payload_for_db["occurred_at"] = occurred_at.isoformat()
+            # payload_json: order_current 형태로 저장 (원하면 그대로 유지)
+            payload_for_db = {
+                "order_id": order_id,
+                "current_stage": current_stage,
+                "current_status": current_status,
+                "hold_reason_code": hold_reason_code,
+                "last_event_type": last_event_type,
+                "last_occurred_at": occurred_at.isoformat(),
+                "tracking_no": tracking_no,
+                "promised_delivery_date": promised_delivery_date,
+                "updated_at": now_utc().isoformat(),
+            }
 
             # -----------------------------
             # (B) 1) events는 무조건 저장
@@ -207,8 +220,8 @@ def main():
                 cur.execute(SQL_INSERT_EVENTS, {
                     "event_id": event_id,
                     "order_id": order_id,
-                    "event_type": event_type,
-                    "reason_code": hold_reason_code,   # 너 테이블 컬럼이 reason_code라 여기에 HOLD 사유 넣음
+                    "event_type": last_event_type,      # ✅ 여기! events.event_type = order_current.last_event_type
+                    "reason_code": hold_reason_code,
                     "occurred_at": occurred_at,
                     "source": "kafka-producer",
                     "payload_json": Json(payload_for_db),
@@ -217,7 +230,6 @@ def main():
             except Exception as e:
                 conn.rollback()
                 print(f"❌ [events 저장 실패] event_id={event_id} error={e}")
-                # events 저장 실패해도 consumer는 계속 돌게 함
                 continue
 
             # -----------------------------
@@ -241,8 +253,8 @@ def main():
                     "current_stage": current_stage,
                     "current_status": current_status,
                     "hold_reason_code": hold_reason_code,
-                    "last_event_type": event_type,      # NOT NULL 보장
-                    "last_occurred_at": occurred_at,    # NOT NULL 보장
+                    "last_event_type": last_event_type,  # ✅ order_current.last_event_type도 동일 값
+                    "last_occurred_at": occurred_at,
                     "tracking_no": tracking_no,
                     "promised_delivery_date": promised_delivery_date,
                 })
@@ -250,7 +262,6 @@ def main():
             except Exception as e:
                 conn.rollback()
                 print(f"❌ [order_current 갱신 실패] order_id={order_id} event_id={event_id} error={e}")
-                # order_current 실패해도 consumer는 계속 돌게 함
                 continue
 
     except KeyboardInterrupt:
