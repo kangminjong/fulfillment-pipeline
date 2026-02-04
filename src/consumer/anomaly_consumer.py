@@ -19,7 +19,8 @@ DB_CONFIG = {
     "port": os.getenv("POSTGRES_PORT", "5432"),
 }
 
-BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+# ✅ producer.py는 BOOTSTRAP_SERVERS 를 쓰고 있어서 호환되게 fallback 추가
+BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS") or os.getenv("BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC_NAME = os.getenv("KAFKA_TOPIC", "event")
 GROUP_ID = os.getenv("KAFKA_GROUP_ID", "anomaly-detection-group")
 
@@ -188,7 +189,8 @@ def check_burst_anomaly(order_data) -> bool:
     if not pid:
         return False
 
-    now_dt = parse_iso_datetime(order_data.get("last_occurred_at") or order_data.get("occurred_at"))
+    # ✅ producer 스키마: event_time 사용
+    now_dt = parse_iso_datetime(order_data.get("event_time") or order_data.get("last_occurred_at") or order_data.get("occurred_at"))
     q = product_rate_tracker[pid]
     q.append(now_dt)
 
@@ -250,7 +252,9 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
     order_id = data.get("order_id")
     product_id = data.get("product_id")
     product_name = data.get("product_name")
-    current_stage = data.get("current_stage")
+
+    # ✅ producer 스키마엔 current_stage 없음 → 기본값 부여
+    current_stage = data.get("current_stage") or "PAYMENT"
 
     # producer는 customer_id → DB user_id
     user_id = data.get("user_id") or data.get("customer_id")
@@ -258,13 +262,17 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
     # producer는 address 키를 쓰는 경우가 많음
     shipping_address = to_text_or_json(data.get("shipping_address") or data.get("address"))
 
+    # ✅ producer 스키마엔 event_type/current_status 없음 → 기본값 부여
     last_event_type = (
         data.get("last_event_type")
         or data.get("event_type")
-        or data.get("current_status")
-        or "UNKNOWN"
+        or "ORDER_CREATED"
     )
-    last_occurred_at = parse_iso_datetime(data.get("last_occurred_at") or data.get("occurred_at"))
+
+    # ✅ producer 스키마: event_time 사용
+    last_occurred_at = parse_iso_datetime(
+        data.get("event_time") or data.get("last_occurred_at") or data.get("occurred_at")
+    )
 
     # ---------------------------------------------------------
     # (DB 구조 대응) 1) events INSERT (원장)
@@ -273,7 +281,11 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
     # - ops_*: anomaly consumer가 남기는 운영 메타
     # ---------------------------------------------------------
     event_type_for_events = "HOLD" if final_status == "HOLD" else last_event_type
-    current_status_for_events = final_status or data.get("current_status") or "UNKNOWN"
+
+    # ✅ producer에 current_status가 없으니 “결제완료 시점”을 기본으로 둠
+    # (원하면 여기 기본값을 ORDER_CREATED로 바꿔도 됨)
+    base_status = data.get("current_status") or "PAID"
+    current_status_for_events = final_status or base_status or "UNKNOWN"
 
     # events의 ops_*는 “운영 상태/메모/담당/시각” 느낌으로 남기기
     ops_status = "AUTO_HOLD" if final_status == "HOLD" else "AUTO_PASS"
@@ -284,7 +296,7 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
     cur.execute(
         SQL_INSERT_EVENTS,
         (
-            str(uuid.uuid4()),         # event_id
+            str(uuid.uuid4()),          # event_id
             order_id,
             event_type_for_events,
             current_status_for_events,  # current_status
@@ -386,13 +398,15 @@ if __name__ == "__main__":
             order = message.value
 
             # 기본은 원래 상태로 통과
-            final_status = order.get("current_status") or "UNKNOWN"
+            final_status = order.get("current_status") or "PAID"
             hold_reason = None
 
             try:
                 with conn.cursor() as cur:
                     # 보통 재고/폭주 판단은 "결제 완료(PAID)" 시점에서만 하는 게 자연스러움
-                    if order.get("current_status") == "PAID":
+                    # ✅ producer 스키마에는 current_status가 없으니 기본을 PAID로 두고 판단한다.
+                    status_for_decision = order.get("current_status") or "PAID"
+                    if status_for_decision == "PAID":
                         # 1) 폭주 감지
                         is_burst = check_burst_anomaly(order)
 
