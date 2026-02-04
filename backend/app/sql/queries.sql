@@ -54,12 +54,13 @@ FROM mw, oc, today;
 
 -- name: timeseries
 SELECT
-  window_end AS ts,
-  orders     AS orders_created,
-  shipped    AS shipped,
-  holds      AS holds
+  date_trunc('hour', window_end) AS ts,
+  SUM(orders)  AS orders_created,
+  SUM(shipped) AS shipped,
+  SUM(holds)   AS holds
 FROM metrics_window
-ORDER BY window_end DESC
+GROUP BY 1
+ORDER BY ts DESC
 LIMIT $1;
 
 
@@ -402,3 +403,33 @@ SET
   updated_at = NOW()
 WHERE
   orders.last_occurred_at <= EXCLUDED.last_occurred_at;
+
+
+-- name: event_update_latest_by_order
+WITH t AS (
+  SELECT event_id
+  FROM events
+  WHERE order_id = $1
+  ORDER BY occurred_at DESC NULLS LAST, ingested_at DESC NULLS LAST
+  LIMIT 1
+)
+UPDATE events e
+SET
+  event_type  = $2,
+  reason_code = $3,
+  occurred_at = NOW(),
+  ingested_at = NOW(),
+  source      = $4
+FROM t
+WHERE e.event_id = t.event_id;
+
+
+
+-- name: event_insert_for_order
+INSERT INTO events (
+  event_id, order_id, event_type, reason_code,
+  occurred_at, ingested_at, source
+)
+VALUES ($1, $2, $3, $4, NOW(), NOW(), $5);
+
+

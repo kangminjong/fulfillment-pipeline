@@ -204,6 +204,7 @@ async def page_alerts(request: Request):
 class AlertActionBody(BaseModel):
     note: str | None = None
     operator: str | None = "operator"
+    next_status: str | None = None
 
 
 class OrderStatusUpdateBody(BaseModel):
@@ -325,23 +326,43 @@ async def api_order_detail(
 # -----------------------------
 @app.post("/api/orders/{order_id}/status")
 async def api_update_order_status(order_id: str, body: OrderStatusUpdateBody):
-    # 1) snapshot 업데이트
-    await execute(get_sql("order_current_update_status"), order_id, body.next_status)
-    print("???????? ========> ", order_id)
-    print("!!!!!!!! ======>", body)
+    pool = app.state.db_pool
+    print("dddddddddddd")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            before = await conn.fetchrow(get_sql("order_one"), order_id)
+            prev = before["current_status"] if before else None
+            print("!!!!!!!! =========>")
+            # 1) orders 스냅샷 업데이트
+            await conn.execute(
+                get_sql("order_current_update_status"),
+                order_id,
+                body.next_status
+            )
+            print("eeeeeeeeee =========>")
+            # 2) events 최신 1건 업데이트 (없으면 insert로 보강)
+            reason = body.note or "manual"
+            src = "dashboard"
+            print("?????????? =========>", reason, "//////", src, "///////", order_id, "//////", body.next_status)
+            await conn.execute(
+                get_sql("event_update_latest_by_order"),
+                order_id,
+                body.next_status,
+                reason,
+                src
+            )
 
-    # # 2) events에 수동 변경 이력 기록(디버깅/감사용)
-    # event_id = str(uuid.uuid4())
-    # await execute(
-    #     get_sql("insert_manual_status_event"),
-    #     event_id,
-    #     order_id,
-    #     body.next_status,
-    #     body.note,
-    #     body.operator,
-    # )
+            after = await conn.fetchrow(get_sql("order_one"), order_id)
 
-    return ({"ok": True, "order_id": order_id, "status": body.next_status})
+    return {
+        "ok": True,
+        "order_id": order_id,
+        "prev_status": prev,
+        "status": after["current_status"] if after else body.next_status,
+        "updated_at": after["updated_at"] if after else None,
+    }
+
+
 
 
 @app.post("/api/alerts/{alert_key}/ack")
@@ -357,13 +378,22 @@ async def api_alert_ack(alert_key: str, body: AlertActionBody):
 @app.post("/api/alerts/{alert_key}/resolve")
 async def api_alert_resolve(alert_key: str, body: AlertActionBody):
     kind, target = parse_alert_key(alert_key)
+
     if kind == "EVENT":
         await execute(get_sql("events_ops_update"), target, "RESOLVED", body.note, body.operator)
-    else:
-        await execute(get_sql("order_hold_ops_update"), target, "RESOLVED", body.note, body.operator)
-        # HOLD는 실제 hold_reason_code 제거까지
-        await execute(get_sql("clear_order_hold"), target)
-    return ({"ok": True})
+        return {"ok": True}
+
+    # HOLD
+    await execute(get_sql("order_hold_ops_update"), target, "RESOLVED", body.note, body.operator)
+    await execute(get_sql("clear_order_hold"), target)
+
+    # ✅ 선택: hold 해제와 동시에 주문 상태도 이동
+    if body.next_status:
+        if body.next_status == "CREATED":
+            raise HTTPException(status_code=400, detail="CREATED는 수동 변경할 수 없습니다.")
+        await execute(get_sql("order_current_update_status"), target, body.next_status)
+
+    return {"ok": True, "order_id": target, "next_status": body.next_status}
 
 
 @app.post("/api/alerts/{alert_key}/retry")
