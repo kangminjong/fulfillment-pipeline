@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 
 
 class OrderStatus(str, Enum):
-    CREATED = "CREATED"
     PAID = "PAID"
     PICKING = "PICKING"
     PACKED = "PACKED"
