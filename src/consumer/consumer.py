@@ -31,6 +31,7 @@ KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "event")
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "order-reader")
 AUTO_OFFSET_RESET = os.getenv("AUTO_OFFSET_RESET", "earliest")
 
+# ✅ 팀 DB 접속 규칙: localhost 사용 안 함 (기본값은 팀 DB IP로)
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "192.168.239.40")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "fulfillment")
@@ -128,7 +129,10 @@ RETURNING raw_id;
 """
 
 # 2) events: 이벤트 원장
-# DB 컬럼: event_id, order_id, event_type, current_status, reason_code, occurred_at, ingested_at, ops_*
+# DB 컬럼:
+#   event_id, order_id, event_type, current_status, reason_code,
+#   occurred_at, ingested_at,
+#   ops_status, ops_note, ops_operator, ops_updated_at
 SQL_INSERT_EVENTS = """
 INSERT INTO public.events (
   event_id,
@@ -138,8 +142,10 @@ INSERT INTO public.events (
   reason_code,
   occurred_at,
   ingested_at,
-  ops_user,
-  ops_comment
+  ops_status,
+  ops_note,
+  ops_operator,
+  ops_updated_at
 ) VALUES (
   %(event_id)s,
   %(order_id)s,
@@ -148,16 +154,21 @@ INSERT INTO public.events (
   %(reason_code)s,
   %(occurred_at)s,
   %(ingested_at)s,
-  %(ops_user)s,
-  %(ops_comment)s
+  %(ops_status)s,
+  %(ops_note)s,
+  %(ops_operator)s,
+  %(ops_updated_at)s
 )
 ON CONFLICT (event_id) DO NOTHING;
 """
 
 # 3) orders: 스냅샷
-# DB 컬럼: order_id, user_id, product_id, product_name, shipping_address,
-#         current_stage, current_status, last_event_type, last_occurred_at,
-#         hold_reason_code, hold_ops_*, raw_reference_id, updated_at
+# DB 컬럼:
+#   order_id, user_id, product_id, product_name, shipping_address,
+#   current_stage, current_status, last_event_type, last_occurred_at,
+#   hold_reason_code,
+#   hold_ops_status, hold_ops_note, hold_ops_operator, hold_ops_updated_at,
+#   raw_reference_id, created_at(default now())
 SQL_UPSERT_ORDERS = """
 INSERT INTO public.orders (
   order_id,
@@ -170,10 +181,11 @@ INSERT INTO public.orders (
   last_event_type,
   last_occurred_at,
   hold_reason_code,
-  hold_ops_user,
-  hold_ops_comment,
-  raw_reference_id,
-  updated_at
+  hold_ops_status,
+  hold_ops_note,
+  hold_ops_operator,
+  hold_ops_updated_at,
+  raw_reference_id
 ) VALUES (
   %(order_id)s,
   %(user_id)s,
@@ -185,10 +197,11 @@ INSERT INTO public.orders (
   %(last_event_type)s,
   %(last_occurred_at)s,
   %(hold_reason_code)s,
-  %(hold_ops_user)s,
-  %(hold_ops_comment)s,
-  %(raw_reference_id)s,
-  %(updated_at)s
+  %(hold_ops_status)s,
+  %(hold_ops_note)s,
+  %(hold_ops_operator)s,
+  %(hold_ops_updated_at)s,
+  %(raw_reference_id)s
 )
 ON CONFLICT (order_id)
 DO UPDATE SET
@@ -201,15 +214,16 @@ DO UPDATE SET
   last_event_type = EXCLUDED.last_event_type,
   last_occurred_at = EXCLUDED.last_occurred_at,
   hold_reason_code = EXCLUDED.hold_reason_code,
-  hold_ops_user = EXCLUDED.hold_ops_user,
-  hold_ops_comment = EXCLUDED.hold_ops_comment,
-  raw_reference_id = EXCLUDED.raw_reference_id,
-  updated_at = EXCLUDED.updated_at;
+  hold_ops_status = EXCLUDED.hold_ops_status,
+  hold_ops_note = EXCLUDED.hold_ops_note,
+  hold_ops_operator = EXCLUDED.hold_ops_operator,
+  hold_ops_updated_at = EXCLUDED.hold_ops_updated_at,
+  raw_reference_id = EXCLUDED.raw_reference_id;
 """
 
-# orders: HOLD 등에서 product_id/user_id 보강용 조회
+# orders: HOLD 등에서 user_id/product_id/product_name 보강용 조회
 SQL_SELECT_FROM_ORDERS = """
-SELECT user_id, product_id, product_name
+SELECT user_id, product_id, product_name, shipping_address
 FROM public.orders
 WHERE order_id = %s
 LIMIT 1;
@@ -254,6 +268,9 @@ def main():
 
             current_stage = event.get("current_stage")
             current_status = event.get("current_status")
+
+            # event_type 우선순위:
+            #  - last_event_type(스냅샷용) -> event_type -> current_status -> UNKNOWN
             event_type = (
                 event.get("last_event_type")
                 or event.get("event_type")
@@ -261,21 +278,37 @@ def main():
                 or "UNKNOWN"
             )
 
-            occurred_at = parse_iso_datetime(event.get("last_occurred_at") or event.get("occurred_at"))
-            updated_at = parse_iso_datetime(event.get("updated_at")) if event.get("updated_at") else None
+            occurred_at = parse_iso_datetime(
+                event.get("last_occurred_at") or event.get("occurred_at")
+            )
             ingested_at = now_utc()
 
             product_id = event.get("product_id")
             product_name = event.get("product_name")
 
-            # HOLD reason / ops (없으면 None)
-            reason_code = event.get("reason_code") or event.get("hold_reason_code")
-            ops_user = event.get("ops_user")
-            ops_comment = event.get("ops_comment")
-            hold_ops_user = event.get("hold_ops_user")
-            hold_ops_comment = event.get("hold_ops_comment")
-
+            # 주소 (orders.shipping_address는 NOT NULL)
             shipping_address = to_text_or_json(event.get("shipping_address") or event.get("address"))
+
+            # reason_code (events.reason_code / orders.hold_reason_code)
+            reason_code = event.get("reason_code") or event.get("hold_reason_code")
+
+            # ── ops 컬럼명 변경 반영 ─────────────────────────────────────────
+            # events: ops_status, ops_note, ops_operator, ops_updated_at
+            ops_status = event.get("ops_status")
+            ops_note = event.get("ops_note") or event.get("ops_comment")
+            ops_operator = event.get("ops_operator") or event.get("ops_user")
+            ops_updated_at = parse_iso_datetime(event.get("ops_updated_at")) if event.get("ops_updated_at") else None
+
+            # orders: hold_ops_status, hold_ops_note, hold_ops_operator, hold_ops_updated_at
+            hold_ops_status = event.get("hold_ops_status")
+            hold_ops_note = event.get("hold_ops_note") or event.get("hold_ops_comment")
+            hold_ops_operator = event.get("hold_ops_operator") or event.get("hold_ops_user")
+            hold_ops_updated_at = (
+                parse_iso_datetime(event.get("hold_ops_updated_at"))
+                if event.get("hold_ops_updated_at")
+                else None
+            )
+            # ─────────────────────────────────────────────────────────────
 
             event_id = event.get("event_id") or stable_event_id(order_id, event_type, occurred_at)
 
@@ -316,19 +349,21 @@ def main():
                 raw_id = cur.fetchone()[0]
 
                 # 2) events insert (원장)
-                #    DB에서 current_status가 NOT NULL이면 fallback 넣어줌
+                #    current_status가 NOT NULL이므로 fallback 보장
                 cur.execute(
                     SQL_INSERT_EVENTS,
                     {
                         "event_id": event_id,
                         "order_id": order_id,
-                        "event_type": event_type,
+                        "event_type": event_type or "UNKNOWN",
                         "current_status": current_status or event_type or "UNKNOWN",
                         "reason_code": reason_code,
                         "occurred_at": occurred_at,
                         "ingested_at": ingested_at,
-                        "ops_user": ops_user,
-                        "ops_comment": ops_comment,
+                        "ops_status": ops_status,
+                        "ops_note": ops_note,
+                        "ops_operator": ops_operator,
+                        "ops_updated_at": ops_updated_at,
                     },
                 )
 
@@ -336,6 +371,8 @@ def main():
                 cur.execute("SAVEPOINT sp_orders;")
                 try:
                     missing = []
+
+                    # orders PK/NOT NULL 필드들
                     if not order_id:
                         missing.append("order_id")
                     if not current_stage:
@@ -343,21 +380,26 @@ def main():
                     if not current_status:
                         missing.append("current_status")
 
-                    # HOLD 같은 이벤트에서 user_id/product_id 빠질 수 있으니 보강 시도
-                    if order_id and (not user_id or not product_id):
+                    # HOLD 같은 이벤트에서 user_id/product_id/product_name/address가 빠질 수 있으니 보강 시도
+                    if order_id and (not user_id or not product_id or not product_name or not shipping_address):
                         cur.execute(SQL_SELECT_FROM_ORDERS, (order_id,))
                         row = cur.fetchone()
                         if row:
-                            existing_user_id, existing_product_id, existing_product_name = row
+                            existing_user_id, existing_product_id, existing_product_name, existing_shipping_address = row
                             user_id = user_id or existing_user_id
                             product_id = product_id or existing_product_id
                             product_name = product_name or existing_product_name
+                            shipping_address = shipping_address or existing_shipping_address
 
-                    # orders의 NOT NULL 제약 대응 (너희 DB 기준)
+                    # 최종 NOT NULL 검증
                     if not user_id:
                         missing.append("user_id")
                     if not product_id:
                         missing.append("product_id")
+                    if not product_name:
+                        missing.append("product_name")
+                    if not shipping_address:
+                        missing.append("shipping_address")
 
                     if missing:
                         print(f"⚠️ [SKIP orders] 필수값 누락: {', '.join(missing)} (event_id={event_id})")
@@ -375,10 +417,11 @@ def main():
                                 "last_event_type": event_type,
                                 "last_occurred_at": occurred_at,
                                 "hold_reason_code": reason_code,
-                                "hold_ops_user": hold_ops_user,
-                                "hold_ops_comment": hold_ops_comment,
+                                "hold_ops_status": hold_ops_status,
+                                "hold_ops_note": hold_ops_note,
+                                "hold_ops_operator": hold_ops_operator,
+                                "hold_ops_updated_at": hold_ops_updated_at,
                                 "raw_reference_id": raw_id,  # ✅ NOT NULL + FK 만족
-                                "updated_at": updated_at or ingested_at,
                             },
                         )
 
