@@ -36,11 +36,11 @@ SELECT
 
   -- 미처리: 결제완료(PAID)만
   (SELECT COUNT(*) FROM orders
-    WHERE current_status = 'PAID') AS backlog,
+    WHERE current_status = 'PAID' AND created_at::date = CURRENT_DATE) AS backlog,
 
   -- HOLD 현재 수
   (SELECT COUNT(*) FROM orders
-    WHERE current_status = 'HOLD') AS holds_now,
+    WHERE current_status = 'HOLD' AND created_at::date = CURRENT_DATE) AS holds_now,
 
   -- 처리중(진행중)
   (SELECT COUNT(*) FROM orders
@@ -144,8 +144,11 @@ mw_agg AS (
 
 holds_now AS (
   SELECT COUNT(*) AS holds_now
-  FROM orders
+  FROM orders o
+  CROSS JOIN r
   WHERE current_status = 'HOLD'
+  AND o.created_at >= r.start_ts
+  AND o.created_at <  r.end_ts
 )
 
 SELECT
@@ -231,7 +234,7 @@ agg AS (
 
     -- Snapshot: 마지막값(있으면)
     (ARRAY_AGG(mw.backlog ORDER BY mw.window_end DESC))[1]         AS backlog,
-    (SELECT COUNT(*) FROM orders WHERE current_status = 'HOLD')    AS holds_now
+    (SELECT COUNT(*) FROM orders o, r WHERE current_status = 'HOLD' AND o.created_at <  r.end_ts AND o.created_at >= r.start_ts ) AS holds_now
   FROM metrics_window mw
   CROSS JOIN r
   WHERE mw.window_start >= r.start_ts
@@ -279,7 +282,7 @@ SELECT
   (ARRAY_AGG(delay_p95_sec ORDER BY window_end DESC))[1] AS delay_p95_sec,
 
   (ARRAY_AGG(backlog ORDER BY window_end DESC))[1]         AS backlog,
-  (SELECT COUNT(*) FROM orders WHERE current_status = 'HOLD')    AS holds_now,
+  (SELECT COUNT(*) FROM orders o WHERE current_status = 'HOLD' AND o.created_at >= CURRENT_DATE - INTERVAL '6 days' AND o.created_at <  CURRENT_DATE + INTERVAL '1 day' ) AS holds_now,
   (ARRAY_AGG(late_orders ORDER BY window_end DESC))[1]     AS late_orders
 FROM metrics_window
 WHERE
@@ -310,7 +313,7 @@ SELECT
   (ARRAY_AGG(delay_p95_sec ORDER BY window_end DESC))[1] AS delay_p95_sec,
 
   (ARRAY_AGG(backlog ORDER BY window_end DESC))[1]         AS backlog,
-  (SELECT COUNT(*) FROM orders WHERE current_status = 'HOLD')    AS holds_now,
+  (SELECT COUNT(*) FROM orders o WHERE current_status = 'HOLD' AND o.created_at >= CURRENT_DATE - INTERVAL '29 days' AND o.created_at <  CURRENT_DATE + INTERVAL '1 day' )     AS holds_now,
   (ARRAY_AGG(late_orders ORDER BY window_end DESC))[1]     AS late_orders
 FROM metrics_window
 WHERE
