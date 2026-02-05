@@ -141,11 +141,7 @@ INSERT INTO public.events (
   current_status,
   reason_code,
   occurred_at,
-  ingested_at,
-  ops_status,
-  ops_note,
-  ops_operator,
-  ops_updated_at
+  ingested_at
 ) VALUES (
   %(event_id)s,
   %(order_id)s,
@@ -153,11 +149,7 @@ INSERT INTO public.events (
   %(current_status)s,
   %(reason_code)s,
   %(occurred_at)s,
-  %(ingested_at)s,
-  %(ops_status)s,
-  %(ops_note)s,
-  %(ops_operator)s,
-  %(ops_updated_at)s
+  %(ingested_at)s
 )
 ON CONFLICT (event_id) DO NOTHING;
 """
@@ -294,11 +286,6 @@ def main():
 
             # ── ops 컬럼명 변경 반영 ─────────────────────────────────────────
             # events: ops_status, ops_note, ops_operator, ops_updated_at
-            ops_status = event.get("ops_status")
-            ops_note = event.get("ops_note") or event.get("ops_comment")
-            ops_operator = event.get("ops_operator") or event.get("ops_user")
-            ops_updated_at = parse_iso_datetime(event.get("ops_updated_at")) if event.get("ops_updated_at") else None
-
             # orders: hold_ops_status, hold_ops_note, hold_ops_operator, hold_ops_updated_at
             hold_ops_status = event.get("hold_ops_status")
             hold_ops_note = event.get("hold_ops_note") or event.get("hold_ops_comment")
@@ -360,10 +347,6 @@ def main():
                         "reason_code": reason_code,
                         "occurred_at": occurred_at,
                         "ingested_at": ingested_at,
-                        "ops_status": ops_status,
-                        "ops_note": ops_note,
-                        "ops_operator": ops_operator,
-                        "ops_updated_at": ops_updated_at,
                     },
                 )
 

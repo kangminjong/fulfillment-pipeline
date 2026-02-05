@@ -80,6 +80,7 @@ RETURNING raw_id;
 
 # (DB 구조 대응) events 원장 INSERT
 # ✅ 최신 events 컬럼: ops_status, ops_note, ops_operator, ops_updated_at
+# ✅ (현재 anomaly_consumer에서는 ops_*는 저장하지 않음)
 SQL_INSERT_EVENTS = """
 INSERT INTO public.events (
     event_id,
@@ -88,15 +89,10 @@ INSERT INTO public.events (
     current_status,
     reason_code,
     occurred_at,
-    ingested_at,
-    ops_status,
-    ops_note,
-    ops_operator,
-    ops_updated_at
+    ingested_at
 ) VALUES (
     %s, %s, %s, %s,
-    %s, %s, %s,
-    %s, %s, %s, %s
+    %s, %s, %s
 )
 ON CONFLICT (event_id) DO NOTHING;
 """
@@ -104,6 +100,7 @@ ON CONFLICT (event_id) DO NOTHING;
 # (DB 구조 대응) orders 스냅샷 UPSERT
 # ✅ 최신 orders 컬럼: hold_ops_status/hold_ops_note/hold_ops_operator/hold_ops_updated_at
 # ✅ created_at은 DEFAULT now()라 INSERT에 넣지 않음
+# ✅ (현재 anomaly_consumer에서는 hold_ops_*는 저장하지 않음)
 SQL_UPSERT_ORDERS = """
 INSERT INTO public.orders (
     order_id,
@@ -116,13 +113,8 @@ INSERT INTO public.orders (
     last_event_type,
     last_occurred_at,
     hold_reason_code,
-    hold_ops_status,
-    hold_ops_note,
-    hold_ops_operator,
-    hold_ops_updated_at,
     raw_reference_id
 ) VALUES (
-    %s, %s, %s, %s,
     %s, %s, %s, %s,
     %s, %s, %s, %s,
     %s, %s, %s
@@ -138,10 +130,6 @@ DO UPDATE SET
     last_event_type = EXCLUDED.last_event_type,
     last_occurred_at = EXCLUDED.last_occurred_at,
     hold_reason_code = EXCLUDED.hold_reason_code,
-    hold_ops_status = EXCLUDED.hold_ops_status,
-    hold_ops_note = EXCLUDED.hold_ops_note,
-    hold_ops_operator = EXCLUDED.hold_ops_operator,
-    hold_ops_updated_at = EXCLUDED.hold_ops_updated_at,
     raw_reference_id = EXCLUDED.raw_reference_id;
 """
 
@@ -332,11 +320,6 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
     # ✅ event_id: 재처리 중복 방지
     event_id = data.get("event_id") or stable_event_id(order_id, event_type_for_events, last_occurred_at)
 
-    ops_status = "AUTO_HOLD" if final_status == "HOLD" else "AUTO_PASS"
-    ops_note = hold_reason if final_status == "HOLD" else None
-    ops_operator = "ANOMALY_CONSUMER"
-    ops_updated_at = ingested_at
-
     cur.execute(
         SQL_INSERT_EVENTS,
         (
@@ -347,14 +330,6 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
             hold_reason,        # reason_code
             last_occurred_at,   # occurred_at
             ingested_at,        # ingested_at
-            ops_status,
-            ops_note
-            or json.dumps(
-                {"note": "auto decision", "meta": raw_payload.get("_meta")},
-                ensure_ascii=False,
-            ),
-            ops_operator,
-            ops_updated_at,
         ),
     )
 
@@ -396,11 +371,6 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
             cur.execute("ROLLBACK TO SAVEPOINT sp_orders;")
             return
 
-        hold_ops_status = "PENDING_REVIEW" if final_status == "HOLD" else None
-        hold_ops_note = hold_reason if final_status == "HOLD" else None
-        hold_ops_operator = "ANOMALY_CONSUMER" if final_status == "HOLD" else None
-        hold_ops_updated_at = ingested_at if final_status == "HOLD" else None
-
         cur.execute(
             SQL_UPSERT_ORDERS,
             (
@@ -414,10 +384,6 @@ def save_to_db(cur, data, final_status, hold_reason=None, kafka_offset=None):
                 last_event_type,
                 last_occurred_at,
                 hold_reason,  # hold_reason_code
-                hold_ops_status,
-                hold_ops_note,
-                hold_ops_operator,
-                hold_ops_updated_at,
                 raw_id,
             ),
         )
