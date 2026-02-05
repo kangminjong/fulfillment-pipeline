@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- =========================================================
+  events.html
+  - 상단(지표/차트): 이벤트 총량/오류/지연 같은 파이프라인 KPI
+  - 중단(필터): 이벤트 목록 테이블만 필터링
+  - 하단(테이블): 이벤트 raw 리스트 확인
+========================================================= -->
+
+<!-- 1) 상단: 지표/차트(풀폭) -->
+<div class="card mb-2">
+  <div class="card-header">
+    <h3 class="card-title">이벤트 운영 지표</h3>
+
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <select id="ts-preset-events" class="form-select form-select-sm w-auto">
+        <option value="12h_30m">최근 12시간(30분)</option>
+        <option value="24h_1h" selected>최근 24시간(1시간)</option>
+        <option value="7d_1d">최근 7일(1일)</option>
+        <option value="30d_1d">최근 30일(1일)</option>
+      </select>
+      <div class="text-secondary small" id="events-kpi-updated-at">-</div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <!-- KPI 4개 + (원하면 2줄로 늘려도 됨) -->
+    <div class="row g-2">
+      <div class="col-6 col-md-4">
+        <div class="text-secondary">총 이벤트</div>
+        <div class="h2 mb-0" id="events-kpi-total">-</div>
+        <div class="text-secondary small">event_total</div>
+      </div>
+
+      <div class="col-6 col-md-4">
+        <div class="text-secondary">오류 이벤트</div>
+        <div class="h2 mb-0" id="events-kpi-errors">-</div>
+        <div class="text-secondary small">event_errors</div>
+      </div>
+
+      <div class="col-6 col-md-4">
+        <div class="text-secondary">지연 p95</div>
+        <div class="h2 mb-0" id="events-kpi-delay-p95">-</div>
+        <div class="text-secondary small">delay_sec</div>
+      </div>
+    </div>
+
+    <hr class="my-3" />
+
+    <!-- 차트 -->
+    <div class="d-flex align-items-center mb-2">
+      <div class="text-secondary">이벤트/오류 추이</div>
+      <div class="ms-auto text-secondary small" id="events-chart-updated-at">-</div>
+    </div>
+
+    <div style="height: 220px;">
+      <canvas id="events-top-chart"></canvas>
+    </div>
+
+    <div class="text-secondary small mt-2">
+
+    </div>
+  </div>
+</div>
+
+<!-- 2) 필터는 "목록 바로 위"에 (기존 id 그대로 유지) -->
+<div class="card mb-2">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-4">
+        <label class="form-label">주문번호(부분검색)</label>
+        <input id="ev-order-id" class="form-control" placeholder="예: ORD-" />
+      </div>
+
+      <div class="col-12 col-md-4">
+        <label class="form-label">이벤트 타입(부분검색)</label>
+        <input id="ev-type" class="form-control" placeholder="예: SHIPPED / HOLD" />
+      </div>
+
+      <div class="col-12 col-md-2">
+        <label class="form-label">오류만</label>
+        <div class="form-check form-switch mt-2">
+          <input id="ev-only-error" class="form-check-input" type="checkbox" />
+        </div>
+      </div>
+
+      <div class="col-12 col-md-2">
+        <button id="btn-ev-search" class="btn btn-primary w-100">
+          <i class="ti ti-search me-2"></i>조회
+        </button>
+      </div>
+
+      <div class="col-12">
+        <div class="text-secondary small">
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3) 테이블(기존 id 유지: events-tbody) -->
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">이벤트 목록</h3>
+    <div class="ms-auto text-secondary small" id="events-updated-at">-</div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table card-table table-vcenter">
+      <thead>
+        <tr>
+          <th>상태</th>
+          <th>주문</th>
+          <th>시각</th>
+          <th>처리</th>
+        </tr>
+      </thead>
+      <tbody id="events-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

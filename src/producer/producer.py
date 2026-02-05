@@ -2,75 +2,96 @@ import time
 import json
 import os
 from kafka import KafkaProducer
-from kafka.errors import NoBrokersAvailable
-
-# 방금 수정한 공장에서 함수 가져오기
-try:
-    from src.producer.data_factory import create_random_event
-except ImportError:
-    # 경로 문제 방지용
-    from data_factory import create_random_event
+from src.producer.data_factory import OrderGenerator # 프로젝트 구조에 맞게 import 경로 확인
 
 # ---------------------------------------------------------
-# ⚙️ 카프카 접속 설정
+# ⚙️ 설정 및 속도 제어
 # ---------------------------------------------------------
-if os.getenv('BOOTSTRAP_SERVERS'):
-    BOOTSTRAP_SERVERS = os.getenv('BOOTSTRAP_SERVERS')
-else:
-    BOOTSTRAP_SERVERS = 'localhost:9092'
+BOOTSTRAP_SERVERS = os.getenv('BOOTSTRAP_SERVERS', 'localhost:9092')
+TOPIC_NAME = 'event'
 
-TOPIC_NAME = 'event'  # 팀원과 약속한 토픽 이름
+# [현재 설정] 테스트를 위해 1개씩 천천히 전송하는 모드
+SCENARIO_DELAY = 1.0   # 시나리오 간 대기 시간 (1초)
+BURST_COUNT = 6        # 기본 생성 개수 (1개)
+BURST_INTERVAL = 0.5   # 메시지 간 간격 (0.5초)
+
+"""
+ [나중용] 10,000건 대량 부하 테스트 시 아래 설정으로 변경하세요:
+SCENARIO_DELAY = 0
+BURST_COUNT = 10000
+BURST_INTERVAL = 0
+"""
 
 def create_producer():
-    """카프카 연결 시도 (무한 재시도 로직)"""
-    producer = None
-    print(f"📡 카프카 브로커 연결 시도 중... ({BOOTSTRAP_SERVERS})")
-    
-    while not producer:
-        try:
-            producer = KafkaProducer(
-                bootstrap_servers=[BOOTSTRAP_SERVERS],
-                # JSON 직렬화 & 한글 깨짐 방지
-                value_serializer=lambda x: json.dumps(x, ensure_ascii=False).encode('utf-8')
-            )
-            print("✅ 카프카 연결 성공!")
-        except NoBrokersAvailable:
-            print("⏳ 브로커를 찾을 수 없습니다. 3초 후 재시도...")
-            time.sleep(3)
-    return producer
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=[BOOTSTRAP_SERVERS],
+            value_serializer=lambda x: json.dumps(x, ensure_ascii=False).encode('utf-8'),
+            acks=1,
+            linger_ms=10
+        )
+        print("✅ 카프카 연결 성공!")
+        return producer
+    except Exception as e:
+        print(f" 카프카 연결 실패: {e}")
+        return None
 
 if __name__ == "__main__":
+    gen = OrderGenerator()
     producer = create_producer()
-    print(f"🚀 [프로듀서] '{TOPIC_NAME}' 토픽으로 주문 데이터 전송 시작...\n")
+    
+    if not producer:
+        exit(1)
+
+    #  실행할 시나리오 순서 정의 (재고 오류 포함)
+    SCENARIO_SEQUENCE = [
+        #"NORMAL", 
+        #"VALID_ERROR", 
+         "OUT_OF_STOCK",  # 재고 오류 시나리오 추가
+        #"USER_ABUSE" 
+         "PRODUCT_BURST"
+    ]
+
+    print(f"[프로듀서] 제어 모드 실행 중... (시나리오 순서: {SCENARIO_SEQUENCE})")
 
     try:
         while True:
-            # 1. 데이터 생성 (Flat JSON 형태)
-            data = create_random_event()
-            
-            # 2. 전송
-            producer.send(TOPIC_NAME, value=data)
-            producer.flush() # 즉시 전송 확인
-            
-            # 3. 로그 출력 (데이터 구조에 맞게 수정됨)
-            # 이제 data['payload'] 같은 건 없습니다. 바로 꺼내면 됩니다.
-            
-            status = data['current_status']
-            order_id = data['order_id']
-            
-            # 상태별로 이모지와 출력 내용을 다르게 해서 보기 편하게 함
-            if status == 'SHIPPED':
-                print(f"🚚 [전송] {status} - {order_id} (운송장: {data['tracking_no']})")
+            for mode in SCENARIO_SEQUENCE:
+                batch_data = []
+
+                # --- [시나리오 선택 로직] producer가 호출 결정 ---
+                if mode == "NORMAL":
+                    batch_data = gen.generate_normal()
+                    print("[NORMAL] 정상 주문 전송")
                 
-            elif status == 'HOLD':
-                print(f"⚠️ [전송] {status} - {order_id} (사유: {data['hold_reason_code']})")
+                elif mode == "VALID_ERROR":
+                    batch_data = gen.generate_validation_error()
+                    print("[VALID_ERROR] 결함 데이터 전송")
                 
-            else: # PAYMENT_CONFIRMED 등
-                print(f"✅ [전송] {status} - {order_id}")
-            
-            # 4. 속도 조절 (1초에 1건)
-            time.sleep(1.0)
+                elif mode == "OUT_OF_STOCK":
+                    #재고 오류 메서드 호출
+                    batch_data = gen.generate_out_of_stock()
+                    print("[OUT_OF_STOCK] 재고 부족 시나리오 전송")
+                
+                elif mode == "USER_ABUSE":
+                    batch_data = gen.generate_user_burst(count=BURST_COUNT)
+                    print(f"[USER_ABUSE] 유저 연사 전송 ({len(batch_data)}건)")
+                
+                elif mode == "PRODUCT_BURST":
+                    batch_data = gen.generate_product_burst(count=BURST_COUNT)
+                    print(f"[PRODUCT_BURST] 상품 폭주 전송 ({len(batch_data)}건)")
+
+                # --- Kafka 전송 로직 ---
+                for msg in batch_data:
+                    producer.send(TOPIC_NAME, value=msg)
+                    
+                    # 메시지 간 간격 (대량 테스트 시 주석 처리하거나 0으로 설정)
+                    if len(batch_data) > 1:
+                        time.sleep(BURST_INTERVAL) 
+                
+                producer.flush() # 전송 확정
+                time.sleep(SCENARIO_DELAY)
 
     except KeyboardInterrupt:
-        print("\n🛑 전송을 중단합니다.")
+        print("\n중단됨: 프로듀서를 종료합니다.")
         producer.close()

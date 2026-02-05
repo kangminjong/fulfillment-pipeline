@@ -1,3 +1,17 @@
+"""
+consumer.py (DB-sql 현재 구조 기준)
+
+- Kafka 'event' 토픽에서 주문 이벤트를 수신하여 Postgres에 적재
+- ✅ 현재 DB 구조: orders_raw(원본) → events(원장) → orders(스냅샷)
+
+────────────────────────────────────────────────────────────────────────────
+✅ 현재 DB 구조에 맞춰 변경된 적재 흐름
+1) orders_raw에 원본(raw_payload) 저장 후 raw_id 확보
+2) events(원장) insert (가능한 한 항상 저장)
+3) orders(스냅샷) upsert (실패해도 events는 남게 SAVEPOINT)
+────────────────────────────────────────────────────────────────────────────
+"""
+
 import json
 import os
 import time
@@ -10,15 +24,15 @@ from kafka import KafkaConsumer
 
 
 # =============================================================================
-# 환경변수
+# 환경변수 (docker-compose 기준 권장)
 # =============================================================================
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "event")  # ★ producer랑 반드시 동일
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "event")
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "order-reader")
 AUTO_OFFSET_RESET = os.getenv("AUTO_OFFSET_RESET", "earliest")
-POLL_TIMEOUT = float(os.getenv("POLL_TIMEOUT", "2.0"))
 
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+# ✅ 팀 DB 접속 규칙: localhost 사용 안 함 (기본값은 팀 DB IP로)
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "192.168.239.40")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "fulfillment")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "admin")
@@ -28,28 +42,20 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "admin")
 # =============================================================================
 # 유틸: 시간 파싱
 # =============================================================================
-def now_utc():
+def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-def parse_occurred_at(value):
-    """
-    producer가 occurred_at을
-    - ISO 문자열("2026-02-02T07:37:35Z" 등)로 주거나
-    - 아예 안 주거나
-    - 이상한 값으로 줄 수 있어서 방어
-    """
+
+def parse_iso_datetime(value) -> datetime:
     if not value:
         return now_utc()
 
-    # 이미 datetime이면 그대로
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
-    # 문자열이면 ISO 파싱 시도
     if isinstance(value, str):
         v = value.strip()
         try:
-            # "Z" 처리
             if v.endswith("Z"):
                 v = v[:-1] + "+00:00"
             dt = datetime.fromisoformat(v)
@@ -57,8 +63,30 @@ def parse_occurred_at(value):
         except Exception:
             return now_utc()
 
-    # 그 외 타입이면 now
     return now_utc()
+
+
+def to_text_or_json(value):
+    """
+    shipping_address(text)에 dict/list가 들어오면 오류 가능
+    - dict/list -> JSON 문자열
+    - 기타 -> str
+    """
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def stable_event_id(order_id: str, event_type: str, occurred_at: datetime) -> str:
+    """
+    producer가 event_id를 안 주는 경우, 재처리에도 중복 insert 줄이기 위한 결정적 UUID
+    """
+    if not order_id:
+        return str(uuid.uuid4())
+    base = f"{order_id}|{event_type}|{occurred_at.isoformat()}"
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, base))
 
 
 # =============================================================================
@@ -83,61 +111,114 @@ def connect_db_with_retry():
 
 
 # =============================================================================
-# SQL
+# SQL (현재 DB-sql 구조 기준)
 # =============================================================================
+
+# 1) orders_raw: 원본 저장 (raw_id 받아오기)
+SQL_INSERT_ORDERS_RAW = """
+INSERT INTO public.orders_raw (
+  raw_payload,
+  kafka_offset,
+  ingested_at
+) VALUES (
+  %(raw_payload)s,
+  %(kafka_offset)s,
+  %(ingested_at)s
+)
+RETURNING raw_id;
+"""
+
+# 2) events: 이벤트 원장
+# DB 컬럼:
+#   event_id, order_id, event_type, current_status, reason_code,
+#   occurred_at, ingested_at,
+#   ops_status, ops_note, ops_operator, ops_updated_at
 SQL_INSERT_EVENTS = """
-INSERT INTO events (
+INSERT INTO public.events (
   event_id,
   order_id,
   event_type,
+  current_status,
   reason_code,
   occurred_at,
-  source,
-  payload_json
+  ingested_at
 ) VALUES (
   %(event_id)s,
   %(order_id)s,
   %(event_type)s,
+  %(current_status)s,
   %(reason_code)s,
   %(occurred_at)s,
-  %(source)s,
-  %(payload_json)s
+  %(ingested_at)s
 )
 ON CONFLICT (event_id) DO NOTHING;
 """
 
-SQL_UPSERT_ORDER_CURRENT = """
-INSERT INTO order_current (
+# 3) orders: 스냅샷
+# DB 컬럼:
+#   order_id, user_id, product_id, product_name, shipping_address,
+#   current_stage, current_status, last_event_type, last_occurred_at,
+#   hold_reason_code,
+#   hold_ops_status, hold_ops_note, hold_ops_operator, hold_ops_updated_at,
+#   raw_reference_id, created_at(default now())
+SQL_UPSERT_ORDERS = """
+INSERT INTO public.orders (
   order_id,
+  user_id,
+  product_id,
+  product_name,
+  shipping_address,
   current_stage,
   current_status,
-  hold_reason_code,
   last_event_type,
   last_occurred_at,
-  tracking_no,
-  promised_delivery_date,
-  updated_at
+  hold_reason_code,
+  hold_ops_status,
+  hold_ops_note,
+  hold_ops_operator,
+  hold_ops_updated_at,
+  raw_reference_id
 ) VALUES (
   %(order_id)s,
+  %(user_id)s,
+  %(product_id)s,
+  %(product_name)s,
+  %(shipping_address)s,
   %(current_stage)s,
   %(current_status)s,
-  %(hold_reason_code)s,
   %(last_event_type)s,
   %(last_occurred_at)s,
-  %(tracking_no)s,
-  %(promised_delivery_date)s,
-  now()
+  %(hold_reason_code)s,
+  %(hold_ops_status)s,
+  %(hold_ops_note)s,
+  %(hold_ops_operator)s,
+  %(hold_ops_updated_at)s,
+  %(raw_reference_id)s
 )
 ON CONFLICT (order_id)
 DO UPDATE SET
+  user_id = EXCLUDED.user_id,
+  product_id = EXCLUDED.product_id,
+  product_name = EXCLUDED.product_name,
+  shipping_address = EXCLUDED.shipping_address,
   current_stage = EXCLUDED.current_stage,
   current_status = EXCLUDED.current_status,
-  hold_reason_code = EXCLUDED.hold_reason_code,
   last_event_type = EXCLUDED.last_event_type,
   last_occurred_at = EXCLUDED.last_occurred_at,
-  tracking_no = EXCLUDED.tracking_no,
-  promised_delivery_date = EXCLUDED.promised_delivery_date,
-  updated_at = now();
+  hold_reason_code = EXCLUDED.hold_reason_code,
+  hold_ops_status = EXCLUDED.hold_ops_status,
+  hold_ops_note = EXCLUDED.hold_ops_note,
+  hold_ops_operator = EXCLUDED.hold_ops_operator,
+  hold_ops_updated_at = EXCLUDED.hold_ops_updated_at,
+  raw_reference_id = EXCLUDED.raw_reference_id;
+"""
+
+# orders: HOLD 등에서 user_id/product_id/product_name 보강용 조회
+SQL_SELECT_FROM_ORDERS = """
+SELECT user_id, product_id, product_name, shipping_address
+FROM public.orders
+WHERE order_id = %s
+LIMIT 1;
 """
 
 
@@ -147,15 +228,18 @@ DO UPDATE SET
 def main():
     print("📨 Kafka Consumer 시작")
     print("=" * 60)
+    print(f"- topic      : {KAFKA_TOPIC}")
+    print(f"- bootstrap  : {KAFKA_BOOTSTRAP_SERVERS}")
+    print(f"- group_id   : {KAFKA_GROUP_ID}")
+    print(f"- offset     : {AUTO_OFFSET_RESET}")
+    print("=" * 60)
 
-    # Kafka Consumer (kafka-python)
     consumer = KafkaConsumer(
         KAFKA_TOPIC,
         bootstrap_servers=[KAFKA_BOOTSTRAP_SERVERS],
         group_id=KAFKA_GROUP_ID,
         auto_offset_reset=AUTO_OFFSET_RESET,
-        enable_auto_commit=True,
-        # producer가 utf-8 JSON으로 보내니까 그대로 dict로
+        enable_auto_commit=False,  # ✅ DB 커밋 성공 후에만 offset commit
         value_deserializer=lambda x: json.loads(x.decode("utf-8")),
     )
 
@@ -166,102 +250,176 @@ def main():
         for msg in consumer:
             event = msg.value if isinstance(msg.value, dict) else {}
 
-            # -----------------------------
-            # (A) 최소 보정/정규화
-            # -----------------------------
-            event_id = event.get("event_id") or str(uuid.uuid4())
-
+            # -------------------------------------------------------------
+            # (A) Producer 스키마 기반 필드 추출/정규화
+            # -------------------------------------------------------------
             order_id = event.get("order_id")
+
+            # producer: customer_id → DB: user_id
+            user_id = event.get("user_id") or event.get("customer_id")
+
             current_stage = event.get("current_stage")
             current_status = event.get("current_status")
 
-            hold_reason_code = event.get("hold_reason_code")
-            occurred_at = parse_occurred_at(event.get("occurred_at"))
-
-            tracking_no = event.get("tracking_no")
-            promised_delivery_date = event.get("promised_delivery_date")
-
-            # ✅ 핵심 수정:
-            # events.event_type 은 "order_current에 들어갈 last_event_type" 값을 따라가야 함
-            # 즉 order_current.last_event_type -> events.event_type
-            last_event_type = (
+            # event_type 우선순위:
+            #  - last_event_type(스냅샷용) -> event_type -> current_status -> UNKNOWN
+            event_type = (
                 event.get("last_event_type")
                 or event.get("event_type")
                 or current_status
                 or "UNKNOWN"
             )
 
-            # 콘솔 로그 (수업 형태 유지)
+            occurred_at = parse_iso_datetime(
+                event.get("last_occurred_at") or event.get("occurred_at")
+            )
+            ingested_at = now_utc()
+
+            product_id = event.get("product_id")
+            product_name = event.get("product_name")
+
+            # 주소 (orders.shipping_address는 NOT NULL)
+            shipping_address = to_text_or_json(event.get("shipping_address") or event.get("address"))
+
+            # reason_code (events.reason_code / orders.hold_reason_code)
+            reason_code = event.get("reason_code") or event.get("hold_reason_code")
+
+            # ── ops 컬럼명 변경 반영 ─────────────────────────────────────────
+            # events: ops_status, ops_note, ops_operator, ops_updated_at
+            # orders: hold_ops_status, hold_ops_note, hold_ops_operator, hold_ops_updated_at
+            hold_ops_status = event.get("hold_ops_status")
+            hold_ops_note = event.get("hold_ops_note") or event.get("hold_ops_comment")
+            hold_ops_operator = event.get("hold_ops_operator") or event.get("hold_ops_user")
+            hold_ops_updated_at = (
+                parse_iso_datetime(event.get("hold_ops_updated_at"))
+                if event.get("hold_ops_updated_at")
+                else None
+            )
+            # ─────────────────────────────────────────────────────────────
+
+            event_id = event.get("event_id") or stable_event_id(order_id, event_type, occurred_at)
+
             print("✅ 메시지 수신")
-            print(f"   order_id : {order_id}")
-            print(f"   status   : {current_status}")
-            print(f"   last_event_type: {last_event_type}")
-            print(f"   partition: {msg.partition}")
-            print(f"   offset   : {msg.offset}")
+            print(f"   order_id        : {order_id}")
+            print(f"   event_type      : {event_type}")
+            print(f"   current_status  : {current_status}")
+            print(f"   partition       : {msg.partition}")
+            print(f"   offset          : {msg.offset}")
             print()
 
-            # payload_json: order_current 형태로 저장 (원하면 그대로 유지)
-            payload_for_db = {
-                "order_id": order_id,
-                "current_stage": current_stage,
-                "current_status": current_status,
-                "hold_reason_code": hold_reason_code,
-                "last_event_type": last_event_type,
-                "last_occurred_at": occurred_at.isoformat(),
-                "tracking_no": tracking_no,
-                "promised_delivery_date": promised_delivery_date,
-                "updated_at": now_utc().isoformat(),
-            }
-
-            # -----------------------------
-            # (B) 1) events는 무조건 저장
-            # -----------------------------
+            # -------------------------------------------------------------
+            # (B) DB 적재 정책
+            # 1) orders_raw 저장 + raw_id 확보
+            # 2) events insert (원장)
+            # 3) orders upsert (스냅샷) - 실패해도 events/raw는 살린다
+            # -------------------------------------------------------------
             try:
-                cur.execute(SQL_INSERT_EVENTS, {
-                    "event_id": event_id,
-                    "order_id": order_id,
-                    "event_type": last_event_type,      # ✅ 여기! events.event_type = order_current.last_event_type
-                    "reason_code": hold_reason_code,
-                    "occurred_at": occurred_at,
-                    "source": "kafka-producer",
-                    "payload_json": Json(payload_for_db),
-                })
+                # 0) 원본 payload에 메타 추가(선택)
+                payload_for_raw = dict(event)
+                payload_for_raw["_meta"] = {
+                    "kafka_topic": msg.topic,
+                    "kafka_partition": msg.partition,
+                    "kafka_offset": msg.offset,
+                    "ingested_at": ingested_at.isoformat(),
+                    "derived_event_id": event_id,
+                }
+
+                # 1) orders_raw insert → raw_id
+                cur.execute(
+                    SQL_INSERT_ORDERS_RAW,
+                    {
+                        "raw_payload": Json(payload_for_raw),
+                        "kafka_offset": msg.offset,
+                        "ingested_at": ingested_at,
+                    },
+                )
+                raw_id = cur.fetchone()[0]
+
+                # 2) events insert (원장)
+                #    current_status가 NOT NULL이므로 fallback 보장
+                cur.execute(
+                    SQL_INSERT_EVENTS,
+                    {
+                        "event_id": event_id,
+                        "order_id": order_id,
+                        "event_type": event_type or "UNKNOWN",
+                        "current_status": current_status or event_type or "UNKNOWN",
+                        "reason_code": reason_code,
+                        "occurred_at": occurred_at,
+                        "ingested_at": ingested_at,
+                    },
+                )
+
+                # 3) orders upsert (스냅샷) - SAVEPOINT
+                cur.execute("SAVEPOINT sp_orders;")
+                try:
+                    missing = []
+
+                    # orders PK/NOT NULL 필드들
+                    if not order_id:
+                        missing.append("order_id")
+                    if not current_stage:
+                        missing.append("current_stage")
+                    if not current_status:
+                        missing.append("current_status")
+
+                    # HOLD 같은 이벤트에서 user_id/product_id/product_name/address가 빠질 수 있으니 보강 시도
+                    if order_id and (not user_id or not product_id or not product_name or not shipping_address):
+                        cur.execute(SQL_SELECT_FROM_ORDERS, (order_id,))
+                        row = cur.fetchone()
+                        if row:
+                            existing_user_id, existing_product_id, existing_product_name, existing_shipping_address = row
+                            user_id = user_id or existing_user_id
+                            product_id = product_id or existing_product_id
+                            product_name = product_name or existing_product_name
+                            shipping_address = shipping_address or existing_shipping_address
+
+                    # 최종 NOT NULL 검증
+                    if not user_id:
+                        missing.append("user_id")
+                    if not product_id:
+                        missing.append("product_id")
+                    if not product_name:
+                        missing.append("product_name")
+                    if not shipping_address:
+                        missing.append("shipping_address")
+
+                    if missing:
+                        print(f"⚠️ [SKIP orders] 필수값 누락: {', '.join(missing)} (event_id={event_id})")
+                    else:
+                        cur.execute(
+                            SQL_UPSERT_ORDERS,
+                            {
+                                "order_id": order_id,
+                                "user_id": user_id,
+                                "product_id": product_id,
+                                "product_name": product_name,
+                                "shipping_address": shipping_address,
+                                "current_stage": current_stage,
+                                "current_status": current_status,
+                                "last_event_type": event_type,
+                                "last_occurred_at": occurred_at,
+                                "hold_reason_code": reason_code,
+                                "hold_ops_status": hold_ops_status,
+                                "hold_ops_note": hold_ops_note,
+                                "hold_ops_operator": hold_ops_operator,
+                                "hold_ops_updated_at": hold_ops_updated_at,
+                                "raw_reference_id": raw_id,  # ✅ NOT NULL + FK 만족
+                            },
+                        )
+
+                except Exception as e_orders:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_orders;")
+                    print(f"⚠️ [orders upsert 실패 - raw/events는 저장됨] event_id={event_id} err={e_orders}")
+
+                # 4) 커밋 후 offset 커밋
                 conn.commit()
+                consumer.commit()
+
             except Exception as e:
                 conn.rollback()
-                print(f"❌ [events 저장 실패] event_id={event_id} error={e}")
-                continue
-
-            # -----------------------------
-            # (C) 2) order_current는 검증 통과 시만 UPSERT
-            # -----------------------------
-            missing = []
-            if not order_id:
-                missing.append("order_id")
-            if not current_stage:
-                missing.append("current_stage")
-            if not current_status:
-                missing.append("current_status")
-
-            if missing:
-                print(f"⚠️ [SKIP order_current] 필수값 누락: {', '.join(missing)} (event_id={event_id})")
-                continue
-
-            try:
-                cur.execute(SQL_UPSERT_ORDER_CURRENT, {
-                    "order_id": order_id,
-                    "current_stage": current_stage,
-                    "current_status": current_status,
-                    "hold_reason_code": hold_reason_code,
-                    "last_event_type": last_event_type,  # ✅ order_current.last_event_type도 동일 값
-                    "last_occurred_at": occurred_at,
-                    "tracking_no": tracking_no,
-                    "promised_delivery_date": promised_delivery_date,
-                })
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                print(f"❌ [order_current 갱신 실패] order_id={order_id} event_id={event_id} error={e}")
+                print(f"❌ [DB 처리 실패] event_id={event_id} order_id={order_id} error={e}")
+                # offset commit 안 함 → 재처리로 유실 방지
                 continue
 
     except KeyboardInterrupt:
@@ -272,7 +430,10 @@ def main():
             conn.close()
         except Exception:
             pass
-        consumer.close()
+        try:
+            consumer.close()
+        except Exception:
+            pass
         print("✅ DB / Consumer 정상 종료")
 
 
