@@ -45,17 +45,17 @@ if __name__ == "__main__":
 
     #  실행할 시나리오 순서 정의 (재고 오류 포함)
     SCENARIO_SEQUENCE = [
-        "NORMAL",
+        # "NORMAL",
         "VALID_ERROR", 
-        "OUT_OF_STOCK",  # 재고 오류 시나리오 추가
-        "USER_ABUSE", 
-        "PRODUCT_BURST"
+        # "OUT_OF_STOCK",  # 재고 오류 시나리오 추가
+        # "USER_ABUSE", 
+        # "PRODUCT_BURST"
     ]
 
     print(f"[프로듀서] 제어 모드 실행 중... (시나리오 순서: {SCENARIO_SEQUENCE})")
 
     try:
-        for i in range(5):
+
             for mode in SCENARIO_SEQUENCE:
                 batch_data = []
 
