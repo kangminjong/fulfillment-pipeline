@@ -45,7 +45,8 @@ if __name__ == "__main__":
 
     #  실행할 시나리오 순서 정의 (재고 오류 포함)
     SCENARIO_SEQUENCE = [
-        # "NORMAL", 
+        "NORMAL",
+        "NORMAL",
         "VALID_ERROR", 
         # "OUT_OF_STOCK",  # 재고 오류 시나리오 추가
         "USER_ABUSE" 
