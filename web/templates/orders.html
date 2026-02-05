@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- =========================================================
+  orders.html
+  - 상단(운영지표/차트): 집계(metrics_window 등) 기반 "운영 전체 상황" 표시
+  - 중단(필터): 아래 테이블(주문 목록)만 필터링
+  - 하단(테이블): 실제 주문을 찾아 조치
+========================================================= -->
+
+<!-- 1) 상단: 지표/차트는 풀폭 -->
+<div class="card mb-2">
+  <div class="card-header">
+    <h3 class="card-title">주문 운영 지표</h3>
+
+    <!-- 기간 프리셋: (선택 UI만 제공) -->
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <select id="ts-preset-orders" class="form-select form-select-sm w-auto">
+        <option value="12h_30m">최근 12시간(30분)</option>
+        <option value="24h_1h" selected>최근 24시간(1시간)</option>
+        <option value="7d_1d">최근 7일(1일)</option>
+        <option value="30d_1d">최근 30일(1일)</option>
+      </select>
+
+      <!-- 상단 지표가 언제 갱신됐는지 표시 -->
+      <div class="text-secondary small" id="orders-kpi-updated-at">-</div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <!-- =====================================================
+      KPI 8개 구성(추천)
+      - 첫 줄: 운영(주문) KPI 4개
+      - 둘째 줄: 운영(지연/비율) + 파이프라인 KPI
+      ※ 값이 안 뜨면 "JS에서 해당 id에 값을 채우는 코드"가 아직 없는 상태
+    ====================================================== -->
+
+    <!-- KPI Row 1: 운영(주문) -->
+    <div class="row g-2">
+      <div class="col-6 col-md-3">
+        <div class="text-secondary">주문</div>
+        <div class="h2 mb-0" id="orders-kpi-orders-today">-</div>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <div class="text-secondary">출고</div>
+        <div class="h2 mb-0" id="orders-kpi-shipped-today">-</div>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <div class="text-secondary">HOLD</div>
+        <div class="h2 mb-0" id="orders-kpi-holds-now">-</div>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <div class="text-secondary">HOLD 비율</div>
+        <div class="h2 mb-0" id="orders-kpi-hold-rate">-</div>
+      </div>
+    </div>
+
+    <hr class="my-3" />
+
+    <!-- 차트 -->
+    <div class="d-flex align-items-center mb-2">
+      <div class="text-secondary">주문 추이</div>
+      <div class="ms-auto text-secondary small" id="orders-chart-updated-at">-</div>
+    </div>
+
+    <div style="height: 220px;">
+      <canvas id="orders-top-chart"></canvas>
+    </div>
+
+    <div class="text-secondary small mt-2">
+
+    </div>
+  </div>
+</div>
+
+<!-- 2) 필터는 "목록 바로 위"에 (테이블만 필터링) -->
+<div class="card mb-2">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-3">
+        <label class="form-label">상태</label>
+        <select id="filter-status" class="form-select">
+          <option value="ALL" selected>전체</option>
+          <option value="CREATED">CREATED</option>
+          <option value="PAID">PAID</option>
+          <option value="PICKING">PICKING</option>
+          <option value="PACKED">PACKED</option>
+          <option value="SHIPPED">SHIPPED</option>
+          <option value="DELIVERED">DELIVERED</option>
+          <option value="CANCELED">CANCELED</option>
+          <option value="HOLD">HOLD</option>
+        </select>
+      </div>
+
+      <!-- <div class="col-12 col-md-3">
+        <label class="form-label">단계</label>
+        <select id="filter-stage" class="form-select">
+          <option value="ALL" selected>전체</option>
+          <option value="ORDER">ORDER</option>
+          <option value="INVENTORY">INVENTORY</option>
+          <option value="PICKING">PICKING</option>
+          <option value="PACKING">PACKING</option>
+          <option value="SHIPMENT">SHIPMENT</option>
+          <option value="DELIVERY">DELIVERY</option>
+        </select>
+      </div> -->
+
+      <div class="col-12 col-md-7">
+        <label class="form-label">검색(주문번호/운송장)</label>
+        <input id="filter-q" class="form-control" placeholder="예: ORD-123 / tracking..." />
+      </div>
+
+      <div class="col-12 col-md-2">
+        <button id="btn-search" class="btn btn-primary w-100">
+          <i class="ti ti-search me-2"></i>조회
+        </button>
+      </div>
+
+      <div class="col-12">
+        <div class="text-secondary small">
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3) 테이블 -->
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">주문 목록</h3>
+    <div class="ms-auto text-secondary small" id="page-updated-at">-</div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table card-table table-vcenter">
+      <thead>
+        <tr>
+          <th>주문번호</th>
+          <th>상태</th>
+          <th>HOLD 사유</th>
+          <th>마지막 이벤트</th>
+          <th>마지막 발생</th> 
+          <th>갱신</th>
+          <th class="text-end">액션</th>
+        </tr>
+      </thead>
+      <tbody id="orders-page-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

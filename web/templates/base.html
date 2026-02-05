@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title }} | Fulfillment Ops</title>
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+    <link rel="stylesheet" href="/static/css/custom.css" />
+  </head>
+
+  <body data-page="{{ page }}" data-order-id="{{ order_id or '' }}">
+    <div class="page">
+      <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+        <div class="container-fluid">
+          <h1 class="navbar-brand navbar-brand-autodark">
+            <a href="/">
+              <span class="ms-2">운영 대시보드</span>
+            </a>
+          </h1>
+
+          <div class="collapse navbar-collapse show">
+            <ul class="navbar-nav pt-lg-3">
+              <li class="nav-item {{ 'active' if page=='dashboard' else '' }}">
+                <a class="nav-link" href="/">
+                  <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-layout-dashboard"></i></span>
+                  <span class="nav-link-title">개요</span>
+                </a>
+              </li>
+
+              <li class="nav-item {{ 'active' if page in ['orders','order_detail'] else '' }}">
+                <a class="nav-link" href="/orders">
+                  <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-package"></i></span>
+                  <span class="nav-link-title">주문</span>
+                </a>
+              </li>
+
+              <li class="nav-item {{ 'active' if page=='events' else '' }}">
+                <a class="nav-link" href="/events">
+                  <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-activity"></i></span>
+                  <span class="nav-link-title">이벤트</span>
+                </a>
+              </li>
+
+              <li class="nav-item {{ 'active' if page=='alerts' else '' }}">
+                <a class="nav-link" href="/alerts">
+                  <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-alert-triangle"></i></span>
+                  <span class="nav-link-title">알림</span>
+                </a>
+              </li>
+            </ul>
+
+            <div class="mt-auto pt-4 small text-secondary">
+              <div class="px-3">
+                <div class="fw-semibold">Mode</div>
+                <div>DB 연결(운영 컬럼 사용)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="page-wrapper">
+        <div class="page-header d-print-none">
+          <div class="container-xl">
+            <div class="row g-2 align-items-center">
+              <div class="col">
+                <h2 class="page-title">{{ page_title }}</h2>
+              </div>
+              <div class="col-auto ms-auto d-print-none">
+                <button id="btn-refresh" class="btn btn-primary">
+                  <i class="ti ti-refresh me-2"></i> 새로고침
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-body">
+          <div class="container-xl">
+            {% block content %}{% endblock %}
+            <div class="text-center text-secondary small my-4">
+              <span id="footer-updated-at">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 공용 모달: 알림 액션 -->
+    <div class="modal modal-blur fade" id="modal-alert-action" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">알림 처리</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="alert-action-key" />
+            <input type="hidden" id="alert-action-type" />
+            <div class="mb-2">
+              <label class="form-label">담당자</label>
+              <input id="alert-operator" class="form-control" placeholder="예: admin" />
+            </div>
+            <div>
+              <label class="form-label">메모</label>
+              <textarea id="alert-note" class="form-control" rows="3" placeholder="처리 내용/원인/다음 액션"></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-light" data-bs-dismiss="modal">취소</button>
+            <button id="btn-alert-submit" class="btn btn-primary">실행</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 공용 모달: 주문 상태 변경 -->
+    <div class="modal modal-blur fade" id="modal-order-status" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">주문 상태 변경</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="order-target-id" />
+            <div class="mb-2">
+              <label class="form-label">다음 상태</label>
+              <select id="order-next-status" class="form-select">
+                <option value="PAID">결제완료</option>
+                <option value="PICKING">피킹중</option>
+                <option value="PACKED">포장완료</option>
+                <option value="SHIPPED">출고/발송완료</option>
+                <option value="DELIVERED">배송완료</option>
+                <option value="CANCELED">취소</option>
+                <option value="HOLD">보류</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">담당자</label>
+              <input id="order-operator" class="form-control" placeholder="예: admin" />
+            </div>
+            <div>
+              <label class="form-label">메모</label>
+              <textarea id="order-note" class="form-control" rows="3" placeholder="변경 사유"></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-light" data-bs-dismiss="modal">취소</button>
+            <button id="btn-order-submit" class="btn btn-primary">변경</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ✅ 공용 모달 (상태 변경/알림 처리에 사용) -->
+    <div class="modal modal-blur fade" id="app-modal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="app-modal-title">제목</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+          </div>
+          <div class="modal-body" id="app-modal-body">
+            내용
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn me-auto" data-bs-dismiss="modal">닫기</button>
+            <button type="button" class="btn btn-primary" id="app-modal-ok">확인</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ✅추가: 모달 오픈 트리거(숨김 버튼) -->
+    <button id="trigger-app-modal" type="button" class="d-none"
+      data-bs-toggle="modal" data-bs-target="#app-modal"></button>
+
+    <button id="trigger-modal-alert-action" type="button" class="d-none"
+      data-bs-toggle="modal" data-bs-target="#modal-alert-action"></button>
+
+    <button id="trigger-modal-order-status" type="button" class="d-none"
+      data-bs-toggle="modal" data-bs-target="#modal-order-status"></button>
+
+    <div class="toast-container position-fixed top-0 end-0 p-3" id="toast-area" style="z-index: 1100;"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js"></script>
+    <script src="/static/js/app.js"></script>
+  </body>
+</html>

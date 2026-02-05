@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row g-2">
+  <div class="col-12 col-lg-5">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">주문 상태</h3>
+        <div class="ms-auto">
+          <button class="btn btn-outline-primary btn-sm" id="btn-open-status-modal">
+            <i class="ti ti-edit me-1"></i>상태 변경
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="mb-2"><span class="text-secondary">order_id</span> <span class="fw-semibold" id="od-order-id">-</span></div>
+        <div class="mb-2"><span class="text-secondary">stage</span> <span class="fw-semibold" id="od-stage">-</span></div>
+        <div class="mb-2"><span class="text-secondary">status</span> <span class="fw-semibold" id="od-status">-</span></div>
+        <div class="mb-2"><span class="text-secondary">hold_reason</span> <span class="fw-semibold" id="od-hold">-</span></div>
+        <div class="mb-2"><span class="text-secondary">last_event</span> <span class="fw-semibold" id="od-last-event">-</span></div>
+        <div class="mb-2"><span class="text-secondary">last_occurred</span> <span class="fw-semibold" id="od-last-occurred">-</span></div>
+        <div class="mb-2"><span class="text-secondary">tracking</span> <span class="fw-semibold" id="od-tracking">-</span></div>
+        <div><span class="text-secondary">updated_at</span> <span class="fw-semibold" id="od-updated">-</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-7">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">관련 알림</h3>
+      </div>
+      <div class="table-responsive">
+        <table class="table card-table table-vcenter">
+          <thead>
+            <tr>
+              <th>상태</th>
+              <th>이벤트</th>
+              <th>사유</th>
+              <th>시각</th>
+              <th>처리</th>
+            </tr>
+          </thead>
+          <tbody id="od-alerts-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card-header">
+    <h3 class="card-title">이벤트(최근)</h3>
+  </div>
+  <div class="table-responsive">
+    <table class="table card-table table-vcenter">
+      <thead>
+        <tr>
+          <th>event_id</th>
+          <th>event_type</th>
+          <th>reason</th>
+          <th>occurred_at</th>
+          <th>ingested_at</th>
+          <th>source</th>
+        </tr>
+      </thead>
+      <tbody id="od-events-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
