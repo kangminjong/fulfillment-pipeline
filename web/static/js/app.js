@@ -195,6 +195,15 @@ function badgeKind(kind) {
   return badge(k || "-", "secondary");
 }
 
+function ErrorbadgeKind(kind) {
+  const k = (kind || "").toUpperCase();
+  if (k === "FUL-VALID") return badge("주문 정보 누락", "orange");
+  if (k === "FUL-INV") return badge("재고 부족", "purple");
+  if (k === "FUL-FRAUD-USER") return badge("유저 기준 이상거래", "purple");
+  if (k === "FUL-FRAUD-PROD") return badge("상품 기준 이상거래", "purple");
+  return badge(k || "-", "secondary");
+}
+
 function badgeOrderStatus(status) {
   const s = (status || "").toUpperCase().trim();
 
@@ -291,6 +300,7 @@ async function loadTimeseries(preset) {
 async function loadDashboard() {
   // 1) Summary KPI
   const s = await fetchJson("/api/summary");
+  console.log(s)
   $("kpi-orders-today").innerText = fmtInt(s.orders_today);
   $("kpi-shipped-today").innerText = fmtInt(s.shipped_today);
   $("kpi-backlog").innerText = fmtInt(s.backlog);
@@ -666,7 +676,7 @@ async function loadAlertsPage() {
         <td>${badgeStatus(row.status)}</td>
         <td><a href="/orders/${row.order_id}">${row.order_id || "-"}</a></td>
         <td>${row.event_id || "-"}</td>
-        <td>${row.reason || "-"}</td>
+        <td>${ErrorbadgeKind(row.reason) || "-"}</td>
         <td>${fmtTs(row.occurred_at)}</td>
         <td>${row.operator || "-"}</td>
         <td class="text-end">
@@ -696,7 +706,7 @@ async function loadOrderDetailPage(orderId) {
   $("od-order-id").innerText = o.order_id || "-";
   $("od-stage").innerText = o.product_name || "-";
   $("od-status").innerHTML = badgeOrderStatus(o.current_status) || "-";
-  $("od-hold").innerText = o.hold_reason_code || "-";
+  $("od-hold").innerText = ErrorbadgeKind(o.hold_reason_code) || "-";
   $("od-updated").innerText = fmtTs(o.created_at) || "-";
   $("od-tracking").innerText = o.tracking_no || "-";
   
@@ -707,7 +717,7 @@ async function loadOrderDetailPage(orderId) {
     <tr>
       <td>${badgeStatus(row.status)}</td>
       <td>${row.event_id || "-"}</td>
-      <td>${row.reason || "-"}</td>
+      <td>${ErrorbadgeKind(row.reason) || "-"}</td>
       <td>${fmtTs(row.occurred_at)}</td>
       <td class="text-end">
         <button class="btn btn-outline-secondary btn-sm" data-alert="${row.alert_key}" data-action="ack">ACK</button>
@@ -723,7 +733,7 @@ async function loadOrderDetailPage(orderId) {
     <tr>
       <td>${row.event_id}</td>
       <td>${badgeOrderStatus(row.current_status)}</td>
-      <td>${row.reason_code ? badge(row.reason_code, "red") : "-"}</td>
+      <td>${row.reason_code ? ErrorbadgeKind(row.reason_code, "red") : "-"}</td>
       <td>${fmtTs(row.ingested_at)}</td>
     </tr>
   `).join("");
