@@ -379,7 +379,7 @@ async def api_kpi_orders(preset: str = Query("24h_1h")):
 
     last = pts[-1]
     backlog = int(last.get("backlog") or 0)
-    holds_now = int(pts[-2].get("holds_now") or 0)
+    holds_now = int(pts[0].get("holds_now") or 0)
     late_orders = int(last.get("late_orders") or 0)
 
     hold_rate = (holds / orders) if orders > 0 else 0.0
@@ -391,7 +391,7 @@ async def api_kpi_orders(preset: str = Query("24h_1h")):
         "shipped": shipped,
         "holds": holds,
         "backlog": backlog,
-        "holds_now": holds_now,
+        "holds_now": holds,
         "late_orders": late_orders,
         "hold_rate": float(hold_rate),
     }
