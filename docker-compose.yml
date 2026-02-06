@@ -41,7 +41,7 @@ services:
     ports:
       - "8080:8080"   # ⚠️ 8080 충돌 방지
 
-    environment:
+    environment:  
       KAFKA_CLUSTERS_0_NAME: local-kafka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
 
@@ -57,10 +57,11 @@ services:
 
     ports:
       - "5432:5432"
-
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
+      POSTGRES_USER: ${POSTGRES_USER}  
+      POSTGRES_PASSWORD: ${}
       POSTGRES_DB: fulfillment
 
     volumes:

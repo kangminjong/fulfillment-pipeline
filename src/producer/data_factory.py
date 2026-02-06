@@ -23,7 +23,6 @@ class OrderGenerator:
             "SHIPPED": "LOGISTICS",
             "DELIVERED": "LOGISTICS",
             "CANCELED": "SYSTEM",
-            "HOLD": "RISK_CHECK"
         }
 
     def _init_products(self):
@@ -54,14 +53,25 @@ class OrderGenerator:
             'TEST-007': '시스템 오류 유발 상품 B', 'TEST-008': '배송 지연 예상 상품',
             'TEST-009': '합포장 테스트용 상품 A', 'TEST-010': '합포장 테스트용 상품 B'
         }
+    def _get_current_time(self):
+        """시스템 로컬 시간과 상관없이 정확한 한국 시각을 반환"""
+        # UTC 기준 시간을 먼저 가져온 뒤 KST로 강제 변환합니다.
+        return datetime.now(timezone.utc).astimezone(KST)
 
     def _get_random_past_time(self):
-        """2026년 1월 20일 ~ 현재 사이의 랜덤 시간 생성 (T0)"""
-        now = datetime.now(KST)
+        """2026년 1월 20일 ~ 현재(KST) 사이의 랜덤 시간 생성"""
+        # 현재 시각을 UTC 기반 KST로 가져와서 미래로 가는 것을 방지합니다.
+        now = datetime.now(timezone.utc).astimezone(KST) 
+        
         start_date = datetime(2026, 1, 20, tzinfo=KST)
-        if start_date > now: return now
+        
+        # 만약 시작일이 지금보다 미래라면 (그럴 리 없겠지만) 현재 시각 반환
+        if start_date > now: 
+            return now
+            
         time_diff = now - start_date
         random_seconds = random.randint(0, int(time_diff.total_seconds()))
+        
         return start_date + timedelta(seconds=random_seconds)
 
     def _generate_order_id(self, product_id, date_obj):
@@ -81,7 +91,7 @@ class OrderGenerator:
         if fixed_t0:
             t0_past = fixed_t0
         else:
-            t0_past = self._get_random_past_time()
+            t0_past = self._get_current_time()
         
         # 2. 📅 [T2] DB 저장 시간 (T0보다 0.1~1.5초 뒤)
         simulated_delay = random.uniform(0.1, 1.5)
@@ -131,7 +141,7 @@ class OrderGenerator:
         p_id = random.choice(self.product_ids)
         
         # 기준 시간(Base Time) 하나 생성
-        base_time = self._get_random_past_time()
+        base_time = self._get_current_time()
         
         batch = []
         for i in range(count):
@@ -145,7 +155,7 @@ class OrderGenerator:
         p_id = random.choice(self.product_ids)
         
         # 기준 시간 생성
-        base_time = self._get_random_past_time()
+        base_time = self._get_current_time()
         
         batch = []
         for i in range(count):
@@ -170,5 +180,5 @@ if __name__ == "__main__":
     gen = OrderGenerator()
     
     print("\n--- ☠️ [검증 3] Empty JSON 생성 확인 ---")
-    empty_data = gen.generate_empty_json()
+    empty_data = gen.generate_normal()
     print(f"생성된 데이터: {empty_data}")
