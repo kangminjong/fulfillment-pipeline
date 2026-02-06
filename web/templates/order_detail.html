@@ -13,14 +13,12 @@
         </div>
       </div>
       <div class="card-body">
-        <div class="mb-2"><span class="text-secondary">order_id</span> <span class="fw-semibold" id="od-order-id">-</span></div>
-        <div class="mb-2"><span class="text-secondary">stage</span> <span class="fw-semibold" id="od-stage">-</span></div>
-        <div class="mb-2"><span class="text-secondary">status</span> <span class="fw-semibold" id="od-status">-</span></div>
-        <div class="mb-2"><span class="text-secondary">hold_reason</span> <span class="fw-semibold" id="od-hold">-</span></div>
-        <div class="mb-2"><span class="text-secondary">last_event</span> <span class="fw-semibold" id="od-last-event">-</span></div>
-        <div class="mb-2"><span class="text-secondary">last_occurred</span> <span class="fw-semibold" id="od-last-occurred">-</span></div>
+        <div class="mb-2"><span class="text-secondary">주문번호</span> <span class="fw-semibold" id="od-order-id">-</span></div>
+        <div class="mb-2"><span class="text-secondary">상품명</span> <span class="fw-semibold" id="od-stage">-</span></div>
+        <div class="mb-2"><span class="text-secondary">상태</span> <span class="fw-semibold" id="od-status">-</span></div>
+        <div class="mb-2"><span class="text-secondary">HOLD 사유</span> <span class="fw-semibold" id="od-hold">-</span></div>
+        <div class="mb-2"><span class="text-secondary">시간</span> <span class="fw-semibold" id="od-updated">-</span></div>
         <div class="mb-2"><span class="text-secondary">tracking</span> <span class="fw-semibold" id="od-tracking">-</span></div>
-        <div><span class="text-secondary">updated_at</span> <span class="fw-semibold" id="od-updated">-</span></div>
       </div>
     </div>
   </div>
@@ -56,12 +54,10 @@
     <table class="table card-table table-vcenter">
       <thead>
         <tr>
-          <th>event_id</th>
-          <th>event_type</th>
-          <th>reason</th>
-          <th>occurred_at</th>
-          <th>ingested_at</th>
-          <th>source</th>
+          <th>EVENT-ID</th>
+          <th>상태</th>
+          <th>사유</th>
+          <th>시간</th>
         </tr>
       </thead>
       <tbody id="od-events-tbody"></tbody>
