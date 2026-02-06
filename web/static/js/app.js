@@ -196,11 +196,26 @@ function badgeKind(kind) {
 }
 
 function badgeOrderStatus(status) {
-  const s = (status || "").toUpperCase();
-  if (s === "HOLD") return badge("HOLD", "red");
-  if (s === "SHIPPED") return badge("SHIPPED", "blue");
-  if (s === "DELIVERED") return badge("DELIVERED", "green");
-  if (s === "CANCELED") return badge("CANCELED", "secondary");
+  const s = (status || "").toUpperCase().trim();
+
+  const META = {
+    CREATED:   { label: "주문생성",          color: "secondary" },
+    PAID:      { label: "결제완료",          color: "indigo" },
+    PICKING:   { label: "피킹중(상품 준비중)", color: "yellow" },
+    PACKED:    { label: "포장완료",          color: "teal" },
+    SHIPPED:   { label: "출고/발송완료",      color: "blue" },
+    DELIVERED: { label: "배송완료",          color: "green" },
+    CANCELED:  { label: "취소",              color: "secondary" },
+    CANCELLED: { label: "취소",              color: "secondary" }, 
+    HOLD:      { label: "HOLD",     color: "red" },
+  };
+
+  const m = META[s];
+
+  // 화면에는 한글 라벨로 표시
+  if (m) return badge(m.label, m.color);
+
+  // 모르는 상태는 그대로(혹은 "-" 처리)
   return badge(s || "-", "azure");
 }
 
@@ -281,10 +296,10 @@ async function loadDashboard() {
   $("kpi-backlog").innerText = fmtInt(s.backlog);
   $("kpi-holds-now").innerText = fmtInt(s.holds_now);
 
-  $("kpi-ingest-count").innerText = fmtInt(s.ingest_count);
-  $("kpi-parse-errors").innerText = fmtInt(s.parse_errors);
-  $("kpi-schema-missing").innerText = fmtInt(s.schema_missing);
-  $("kpi-hold-rate").innerText = fmtPct(s.hold_rate);
+  // $("kpi-ingest-count").innerText = fmtInt(s.ingest_count);
+  // $("kpi-parse-errors").innerText = fmtInt(s.parse_errors);
+  // $("kpi-schema-missing").innerText = fmtInt(s.schema_missing);
+  // $("kpi-hold-rate").innerText = fmtPct(s.hold_rate);
 
   // 2) Timeseries chart (preset)
   const preset = getPreset("dashboard", "24h_1h");
@@ -319,7 +334,7 @@ async function loadDashboard() {
   }
 
   // 3) Recent Orders
-  const o = await fetchJson("/api/orders?limit=20");
+  const o = await fetchJson("/api/orders?limit=10");
   const tbody = $("orders-tbody");
   tbody.innerHTML = (o.items || []).map(row => {
     const hold = row.hold_reason_code ? badge("Y", "red") : badge("-", "secondary");
@@ -561,7 +576,7 @@ async function loadEventsPage() {
     const reason = row.reason_code ? badge(row.reason_code, "red") : "-";
     return `
       <tr>
-        <td>${badgeOrderStatus(row.event_type)}</td>
+        <td>${badgeOrderStatus(row.current_status)}</td>
         <td><a href="/orders/${row.order_id}">${row.order_id || "-"}</a></td>
         <td>${fmtTs(row.occurred_at)}</td>
         <td>${fmtTs(row.ingested_at)}</td>
@@ -679,13 +694,12 @@ async function loadOrderDetailPage(orderId) {
 
   const o = data.order || {};
   $("od-order-id").innerText = o.order_id || "-";
-  $("od-stage").innerText = o.current_stage || "-";
-  $("od-status").innerText = o.current_status || "-";
+  $("od-stage").innerText = o.product_name || "-";
+  $("od-status").innerHTML = badgeOrderStatus(o.current_status) || "-";
   $("od-hold").innerText = o.hold_reason_code || "-";
-  $("od-last-event").innerText = o.last_event_type || "-";
-  $("od-last-occurred").innerText = fmtTs(o.last_occurred_at);
+  $("od-updated").innerText = fmtTs(o.created_at) || "-";
   $("od-tracking").innerText = o.tracking_no || "-";
-  $("od-updated").innerText = fmtTs(o.created_at);
+  
 
   // related alerts
   const atbody = $("od-alerts-tbody");
@@ -708,11 +722,9 @@ async function loadOrderDetailPage(orderId) {
   etbody.innerHTML = (data.events || []).map(row => `
     <tr>
       <td>${row.event_id}</td>
-      <td>${row.event_type}</td>
+      <td>${badgeOrderStatus(row.current_status)}</td>
       <td>${row.reason_code ? badge(row.reason_code, "red") : "-"}</td>
-      <td>${fmtTs(row.occurred_at)}</td>
       <td>${fmtTs(row.ingested_at)}</td>
-      <td>${row.source}</td>
     </tr>
   `).join("");
 

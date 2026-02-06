@@ -462,8 +462,9 @@ ORDER BY created_at DESC
 LIMIT $4;
 
 -- name: order_one
-SELECT *
-FROM orders
+SELECT o.*, p.product_name
+FROM orders o
+JOIN products p ON p.product_id = o.product_id
 WHERE order_id = $1;
 
 
@@ -476,6 +477,7 @@ SELECT
   event_id,
   order_id,
   event_type,
+  current_status,
   reason_code,
   occurred_at,
   ingested_at
@@ -496,6 +498,7 @@ SELECT
   order_id,
   event_type,
   reason_code,
+  current_status,
   occurred_at,
   ingested_at
 FROM events
@@ -613,6 +616,17 @@ VALUES(
 );
 
 -- name: order_current_update_status
+UPDATE orders
+SET
+  current_status   = $2,
+  last_event_type  = $2,
+  last_occurred_at = now(),
+  hold_reason_code = CASE
+                       WHEN $2 = 'HOLD' THEN hold_reason_code
+                       ELSE NULL
+                     END
+WHERE order_id = $1;
+
 -- name: events_ops_update
 WITH e_prev AS (
   SELECT
