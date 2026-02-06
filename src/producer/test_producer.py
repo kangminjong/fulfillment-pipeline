@@ -36,9 +36,7 @@ if __name__ == "__main__":
 
     # 시나리오 정의
     SCENARIOS = [
-        "NORMAL",
-        "NORMAL",
-        "NORMAL"
+        "STOCK_OUT"
     ]
 
     try:
