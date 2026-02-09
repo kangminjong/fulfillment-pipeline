@@ -3,9 +3,6 @@
 여러 판매 채널에서 들어오는 **주문/이벤트를 Kafka로 통합 수집**하고,  
 Consumer에서 **검증·이상탐지 → HOLD 격리**, **Slack 알림**, **PostgreSQL 저장/집계(metrics_window)** 후  
 웹 대시보드에서 **현황 모니터링 + 운영 조치(ACK/RESOLVE/RETRY)**까지 연결하는 프로젝트입니다.
-
-## 발표자료
-[Uploading 2조_2차프로젝[트.pdf…]()](https://github.com/kangminjong/fulfillment-pipeline/blob/main/2%EC%A1%B0_2%EC%B0%A8%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8.pdf)
 ---
 
 ## 목차
