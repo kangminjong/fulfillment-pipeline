@@ -4,6 +4,8 @@
 Consumer에서 **검증·이상탐지 → HOLD 격리**, **Slack 알림**, **PostgreSQL 저장/집계(metrics_window)** 후  
 웹 대시보드에서 **현황 모니터링 + 운영 조치(ACK/RESOLVE/RETRY)**까지 연결하는 프로젝트입니다.
 
+## 발표자료
+[Uploading 2조_2차프로젝트.pdf…]()
 ---
 
 ## 목차
